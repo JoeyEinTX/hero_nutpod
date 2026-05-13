@@ -11,9 +11,37 @@ cameras:
     role: exterior
 
 capture:
-  format: jpeg
-  resolution: [4608, 2592]
+  snapshot:
+    format: jpeg
+    resolution: [4608, 2592]
+  clip:
+    resolution: [2304, 1296]
+    framerate: 30
+    pre_roll_seconds: 5
+    post_roll_seconds: 10
+  motion_sampling:
+    resolution: [1536, 864]
+    framerate: 30
+
+heartbeat:
+  interval_minutes: 15
+
+motion:
+  sensitivity_preset: medium
+  pixel_threshold: 25
+  area_threshold_percent: 2.0
+  cooldown_seconds: 30
+
+retention:
+  clips_days: 7
+  snapshots_days: 7
+  heartbeats_days: 30
+  logs_days: null      # null = never delete
+  db_rows_days: null   # null = never delete
 
 paths:
   snapshots: output/snapshots
+  clips: output/clips
+  database: output/nutflix.db
   logs: logs
+  keepers_subdir: keepers

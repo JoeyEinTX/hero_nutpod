@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+output/snapshots/*.jpg
+output/snapshots/*.mp4
+output/clips/*.mp4
+output/nutflix.db
+logs/*.log
+!output/snapshots/keepers/.gitkeep
+!output/clips/keepers/.gitkeep
