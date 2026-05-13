@@ -1,0 +1,19 @@
+device:
+  name: Hero
+  type: NutPod
+
+cameras:
+  nestcam:
+    port: 0
+    role: interior
+  crittercam:
+    port: 1
+    role: exterior
+
+capture:
+  format: jpeg
+  resolution: [4608, 2592]
+
+paths:
+  snapshots: output/snapshots
+  logs: logs

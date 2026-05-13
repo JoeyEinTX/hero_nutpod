@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import ast,sys; [ast.parse\\(open\\(f\\).read\\(\\), f\\) for f in ['main.py','cameras/__init__.py','cameras/camera_device.py','cameras/camera_manager.py','utils/__init__.py','utils/config_loader.py','utils/logger_setup.py']]; print\\('syntax OK'\\)\")"
+    ]
+  }
+}
