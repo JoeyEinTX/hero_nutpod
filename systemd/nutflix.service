@@ -1,0 +1,14 @@
+[Unit]
+Description=Nutflix / Hero NutPod motion service
+After=network.target
+
+[Service]
+Type=simple
+User=joey
+WorkingDirectory=/home/joey/hero_nutpod
+ExecStart=/usr/bin/python3 /home/joey/hero_nutpod/service.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

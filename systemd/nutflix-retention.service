@@ -1,0 +1,9 @@
+[Unit]
+Description=Nutflix / Hero NutPod retention cleanup
+After=network.target
+
+[Service]
+Type=oneshot
+User=joey
+WorkingDirectory=/home/joey/hero_nutpod
+ExecStart=/usr/bin/python3 /home/joey/hero_nutpod/retention.py
