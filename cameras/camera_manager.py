@@ -229,8 +229,8 @@ class CameraWorker(threading.Thread):
 
     def __init__(self, *, display_name, device_name, motion_camera, detector,
                  event_log, snapshots_dir, clips_dir,
-                 heartbeat_interval_seconds, post_roll_seconds, stop_event,
-                 logger):
+                 heartbeat_interval_seconds, post_roll_seconds,
+                 motion_framerate, stop_event, logger):
         super().__init__(name=f"camera-{display_name}", daemon=True)
         self.display_name = display_name
         self.device_name = device_name
@@ -241,8 +241,16 @@ class CameraWorker(threading.Thread):
         self.clips_dir = Path(clips_dir)
         self.heartbeat_interval_seconds = float(heartbeat_interval_seconds)
         self.post_roll_seconds = int(post_roll_seconds)
+        self.motion_framerate = int(motion_framerate)
         self.stop_event = stop_event
         self.logger = logger
+
+        # Cap the motion loop near the actual frame rate. Picamera2's
+        # capture_array("lores") returns the most recent frame immediately
+        # rather than blocking for a new one, so without this the loop
+        # re-processes the same frame thousands of times per second and
+        # pegs the CPU.
+        self._frame_interval = 1.0 / float(self.motion_framerate)
 
         self._next_heartbeat = time.monotonic() + self.heartbeat_interval_seconds
 
@@ -271,6 +279,12 @@ class CameraWorker(threading.Thread):
                     # Brief pause before retrying so a persistent error
                     # doesn't spin the CPU.
                     self.stop_event.wait(1.0)
+                    # Skip the frame-interval wait below — we already paused.
+                    continue
+                # Rate-limit to the motion sampling framerate so we don't
+                # re-process the same lores frame. stop_event.wait (vs
+                # time.sleep) keeps shutdown latency to one frame interval.
+                self.stop_event.wait(self._frame_interval)
         finally:
             self.motion_camera.stop()
             self.logger.info(f"{self.display_name} stopped")
@@ -383,6 +397,7 @@ def build_workers(config, event_log, stop_event, logger):
             clips_dir=clips_dir,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             post_roll_seconds=clip_cfg["post_roll_seconds"],
+            motion_framerate=motion_cfg["framerate"],
             stop_event=stop_event,
             logger=logger,
         )
