@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Nutflix{% endblock %} — Nutflix</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="wordmark" href="{{ url_for('live') }}">
+      <img src="{{ url_for('static', filename='nutflix.svg') }}" alt="NUTFLIX" height="28">
+    </a>
+    <nav class="primary-nav">
+      <a href="{{ url_for('live') }}"        class="{{ 'active' if active_page == 'live'   else '' }}">Live</a>
+      <a href="{{ url_for('events_list') }}" class="{{ 'active' if active_page == 'events' else '' }}">Events</a>
+      <a href="{{ url_for('status') }}"      class="{{ 'active' if active_page == 'status' else '' }}">Status</a>
+    </nav>
+  </header>
+
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <span>Hero NutPod — local dashboard, LAN only, no auth.</span>
+  </footer>
+</body>
+</html>

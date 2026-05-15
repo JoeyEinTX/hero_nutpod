@@ -82,6 +82,78 @@ class EventLog:
             row = cur.fetchone()
         return row[0] if row else None
 
+    def get_event_by_id(self, event_id):
+        """Return one event row, or None. Used by the dashboard detail page."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT id, timestamp, device_name, camera_name, event_type, "
+                "snapshot_path, clip_path, tags "
+                "FROM events WHERE id = ?",
+                (int(event_id),),
+            )
+            return cur.fetchone()
+
+    def query_events_page(self, limit, offset, camera_filter=None):
+        """Paginated event list for the dashboard /events view.
+
+        camera_filter is a lowercase config key ('nestcam' / 'crittercam') or
+        None for all cameras. Stored camera_name uses the PascalCase display
+        name, so we case-insensitive match on it.
+        """
+        with self._lock:
+            if camera_filter:
+                cur = self._conn.execute(
+                    "SELECT id, timestamp, device_name, camera_name, event_type, "
+                    "snapshot_path, clip_path, tags "
+                    "FROM events WHERE LOWER(camera_name) = ? "
+                    "ORDER BY id DESC LIMIT ? OFFSET ?",
+                    (camera_filter.lower(), int(limit), int(offset)),
+                )
+            else:
+                cur = self._conn.execute(
+                    "SELECT id, timestamp, device_name, camera_name, event_type, "
+                    "snapshot_path, clip_path, tags "
+                    "FROM events ORDER BY id DESC LIMIT ? OFFSET ?",
+                    (int(limit), int(offset)),
+                )
+            return cur.fetchall()
+
+    def count_events(self, camera_filter=None):
+        with self._lock:
+            if camera_filter:
+                cur = self._conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE LOWER(camera_name) = ?",
+                    (camera_filter.lower(),),
+                )
+            else:
+                cur = self._conn.execute("SELECT COUNT(*) FROM events")
+            return cur.fetchone()[0]
+
+    def latest_heartbeat(self, camera_name):
+        """Return the timestamp of the latest heartbeat for the given camera,
+        or None. Used by the /status page."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT timestamp FROM events "
+                "WHERE event_type = 'heartbeat' AND camera_name = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (camera_name,),
+            )
+            row = cur.fetchone()
+        return row[0] if row else None
+
+    def update_paths(self, event_id, snapshot_path, clip_path):
+        """Rewrite snapshot_path and clip_path for one event. Used after a
+        keeper move (or reverse). NULL is preserved when the corresponding
+        file didn't exist."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE events SET snapshot_path = ?, clip_path = ? "
+                "WHERE id = ?",
+                (snapshot_path, clip_path, int(event_id)),
+            )
+            self._conn.commit()
+
     def close(self):
         with self._lock:
             self._conn.close()

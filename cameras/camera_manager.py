@@ -19,7 +19,18 @@ post_roll_seconds. The raw .h264 file is then muxed to .mp4 with ffmpeg.
 
 For the full-resolution snapshot (4608x2592) the camera leaves motion mode,
 reconfigures to a still configuration, captures, and re-enters motion mode.
+
+Phase 3 additions to CameraWorker (additive only, Phase 2 logic unchanged):
+- BrightnessMonitor fed every motion tick; transitions drive an IREmitter
+  on()/off() so IR LEDs follow the scene's average brightness.
+- Preview-frame writer: every preview_refresh_seconds, the current lores
+  Y-plane frame is saved as a grayscale JPEG to output/preview/{name}.jpg
+  for the dashboard's live view.
+- IR state is published to output/preview/state.json (one shared file across
+  both workers, atomic rename) so the dashboard can show it on /status.
 """
+import json
+import os
 import subprocess
 import threading
 import time
@@ -223,14 +234,47 @@ class MotionCamera:
         self._circular_output = None
 
 
+class IRStatePublisher:
+    """Shared writer for output/preview/state.json.
+
+    Both CameraWorkers call publish() when their IR state transitions; we
+    serialize the file write under a lock and rename atomically so the
+    dashboard never sees a half-written JSON. Per Section 5.3 the dashboard
+    is a separate process, so the filesystem is the only sync channel.
+    """
+
+    def __init__(self, state_path):
+        self.state_path = Path(state_path)
+        self._lock = threading.Lock()
+        self._state = {}
+
+    def publish(self, camera_key, ir_state):
+        with self._lock:
+            self._state[camera_key] = ir_state
+            payload = {
+                **self._state,
+                "updated": datetime.now().isoformat(timespec="seconds"),
+            }
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload))
+            os.replace(tmp, self.state_path)
+
+
 class CameraWorker(threading.Thread):
     """One thread per camera. Runs motion sampling, fires clip + snapshot on
-    motion, takes a heartbeat snapshot every heartbeat_interval_seconds."""
+    motion, takes a heartbeat snapshot every heartbeat_interval_seconds.
+
+    Phase 3: also runs brightness monitoring (drives IR emitter) and writes
+    a preview frame to disk every preview_refresh_seconds. Both happen
+    inline in the motion tick — no extra threads."""
 
     def __init__(self, *, display_name, device_name, motion_camera, detector,
                  event_log, snapshots_dir, clips_dir,
                  heartbeat_interval_seconds, post_roll_seconds,
-                 motion_framerate, stop_event, logger):
+                 motion_framerate, stop_event, logger,
+                 brightness_monitor, ir_emitter, ir_state_publisher,
+                 preview_dir, preview_refresh_seconds):
         super().__init__(name=f"camera-{display_name}", daemon=True)
         self.display_name = display_name
         self.device_name = device_name
@@ -245,6 +289,17 @@ class CameraWorker(threading.Thread):
         self.stop_event = stop_event
         self.logger = logger
 
+        self.brightness_monitor = brightness_monitor
+        self.ir_emitter = ir_emitter
+        self.ir_state_publisher = ir_state_publisher
+        self.preview_dir = Path(preview_dir)
+        self.preview_refresh_seconds = float(preview_refresh_seconds)
+        self._preview_path = self.preview_dir / f"{display_name.lower()}.jpg"
+        self._last_preview_write = 0.0
+        # Track committed brightness state so we only fire IR transitions
+        # on actual changes, not every tick.
+        self._last_ir_state = "light"
+
         # Cap the motion loop near the actual frame rate. Picamera2's
         # capture_array("lores") returns the most recent frame immediately
         # rather than blocking for a new one, so without this the loop
@@ -257,6 +312,12 @@ class CameraWorker(threading.Thread):
     def run(self):
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
         self.clips_dir.mkdir(parents=True, exist_ok=True)
+        self.preview_dir.mkdir(parents=True, exist_ok=True)
+
+        # Seed the shared IR-state file with this camera's initial state so
+        # the dashboard's /status page has something to read even before the
+        # first transition.
+        self._publish_ir_state(self._last_ir_state)
 
         try:
             self.motion_camera.start_motion_mode()
@@ -286,17 +347,70 @@ class CameraWorker(threading.Thread):
                 # time.sleep) keeps shutdown latency to one frame interval.
                 self.stop_event.wait(self._frame_interval)
         finally:
+            try:
+                self.ir_emitter.off()
+                self.ir_emitter.close()
+            except Exception:
+                pass
             self.motion_camera.stop()
             self.logger.info(f"{self.display_name} stopped")
 
     def _tick(self):
         frame = self.motion_camera.read_motion_frame()
+
+        # Brightness monitoring + IR emitter follow the same lores frame the
+        # detector sees, so we get this for free without a second camera read.
+        new_state = self.brightness_monitor.update(frame)
+        if new_state != self._last_ir_state:
+            self.logger.info(
+                f"{self.display_name} brightness state -> {new_state}"
+            )
+            if new_state == "dark":
+                self.ir_emitter.on()
+            else:
+                self.ir_emitter.off()
+            self._last_ir_state = new_state
+            self._publish_ir_state(new_state)
+
+        # Throttled preview write for the dashboard's live view.
+        now = time.monotonic()
+        if (now - self._last_preview_write) >= self.preview_refresh_seconds:
+            self._write_preview(frame)
+            self._last_preview_write = now
+
         triggered = self.detector.update(frame)
 
         if triggered:
             self._handle_motion()
         elif time.monotonic() >= self._next_heartbeat:
             self._handle_heartbeat()
+
+    def _write_preview(self, frame):
+        """Save the current Y-plane frame as a grayscale JPEG preview."""
+        try:
+            from PIL import Image
+        except ImportError:
+            # PIL absent on a dev machine — skip silently. The dashboard's
+            # /preview route will just 404 until PIL is installed.
+            return
+        try:
+            tmp = self._preview_path.with_suffix(".jpg.tmp")
+            Image.fromarray(frame, mode="L").save(tmp, "JPEG", quality=80)
+            os.replace(tmp, self._preview_path)
+        except Exception as e:
+            self.logger.warning(
+                f"{self.display_name} preview write failed: {e}"
+            )
+
+    def _publish_ir_state(self, ir_state):
+        if self.ir_state_publisher is None:
+            return
+        try:
+            self.ir_state_publisher.publish(self.display_name.lower(), ir_state)
+        except Exception as e:
+            self.logger.warning(
+                f"{self.display_name} IR state publish failed: {e}"
+            )
 
     def _handle_motion(self):
         timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -354,6 +468,8 @@ def build_workers(config, event_log, stop_event, logger):
     Returns the list of (not-yet-started) workers. service.py owns starting
     and joining them.
     """
+    from ir.emitter import make_ir_emitter
+    from sensors.brightness import BrightnessMonitor
     from utils.config_loader import resolve_motion_thresholds
 
     device_name = config["device"]["name"]
@@ -369,6 +485,14 @@ def build_workers(config, event_log, stop_event, logger):
 
     snapshots_dir = Path(config["paths"]["snapshots"])
     clips_dir = Path(config["paths"]["clips"])
+    preview_dir = Path(config["paths"]["preview"])
+
+    dashboard_cfg = config["dashboard"]
+    ir_cfg = config["ir_emitter"]
+
+    # One shared publisher for the IR-state JSON file: both workers write
+    # into it, so they need a common lock.
+    ir_state_publisher = IRStatePublisher(preview_dir / "state.json")
 
     workers = []
     for key, cam_cfg in config["cameras"].items():
@@ -387,6 +511,15 @@ def build_workers(config, event_log, stop_event, logger):
             area_threshold_percent=area_threshold_percent,
             cooldown_seconds=cooldown_seconds,
         )
+        brightness_monitor = BrightnessMonitor(
+            threshold=ir_cfg["brightness_threshold"],
+            smoothing_seconds=ir_cfg["threshold_smoothing_seconds"],
+        )
+        ir_emitter = make_ir_emitter(
+            gpio_pin=ir_cfg["cameras"][key]["gpio_pin"],
+            enabled=ir_cfg["enabled"],
+            logger=logger,
+        )
         worker = CameraWorker(
             display_name=display_name,
             device_name=device_name,
@@ -400,6 +533,11 @@ def build_workers(config, event_log, stop_event, logger):
             motion_framerate=motion_cfg["framerate"],
             stop_event=stop_event,
             logger=logger,
+            brightness_monitor=brightness_monitor,
+            ir_emitter=ir_emitter,
+            ir_state_publisher=ir_state_publisher,
+            preview_dir=preview_dir,
+            preview_refresh_seconds=dashboard_cfg["preview_refresh_seconds"],
         )
         workers.append(worker)
     return workers

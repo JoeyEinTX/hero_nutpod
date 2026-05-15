@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Events{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>Latest events</h1>
+  <p class="subtle">{{ total }} total. Page {{ page }} of {{ total_pages }}.</p>
+</section>
+
+<form method="get" action="{{ url_for('events_list') }}" class="filter-bar">
+  <label for="camera-filter">Camera:</label>
+  <select id="camera-filter" name="camera" onchange="this.form.submit()">
+    <option value="" {{ '' if camera_filter else 'selected' }}>All</option>
+    {% for cam in camera_keys %}
+    <option value="{{ cam }}" {{ 'selected' if camera_filter == cam else '' }}>{{ cam | capitalize }}</option>
+    {% endfor %}
+  </select>
+  <noscript><button type="submit">Apply</button></noscript>
+</form>
+
+{% if events %}
+<table class="events-table">
+  <thead>
+    <tr>
+      <th>Thumb</th>
+      <th>Time</th>
+      <th>Camera</th>
+      <th>Type</th>
+      <th>Tags</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for ev in events %}
+    <tr class="event-row {{ 'is-keeper' if ev.is_keeper else '' }}">
+      <td class="thumb-cell">
+        {% if ev.snapshot_path %}
+        <a href="{{ url_for('event_detail', event_id=ev.id) }}">
+          <img class="thumb" src="{{ url_for('snapshot', event_id=ev.id) }}" alt="snapshot">
+        </a>
+        {% else %}
+        <span class="subtle">no snap</span>
+        {% endif %}
+      </td>
+      <td><a href="{{ url_for('event_detail', event_id=ev.id) }}">{{ ev.timestamp }}</a></td>
+      <td>{{ ev.camera_name }}</td>
+      <td><span class="badge badge-{{ ev.event_type }}">{{ ev.event_type }}</span></td>
+      <td class="subtle">{{ ev.tags or '' }}</td>
+      <td class="action-cell">
+        {% if ev.is_keeper %}
+        <form method="post" action="{{ url_for('unkeep', event_id=ev.id) }}">
+          <button type="submit" class="btn btn-secondary">Unkeep</button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ url_for('keep', event_id=ev.id) }}">
+          <button type="submit" class="btn btn-primary">Keep</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<nav class="pagination">
+  {% if page > 1 %}
+  <a href="{{ url_for('events_list', page=page-1, camera=camera_filter) }}">&larr; Newer</a>
+  {% else %}
+  <span class="disabled">&larr; Newer</span>
+  {% endif %}
+  <span class="page-indicator">{{ page }} / {{ total_pages }}</span>
+  {% if page < total_pages %}
+  <a href="{{ url_for('events_list', page=page+1, camera=camera_filter) }}">Older &rarr;</a>
+  {% else %}
+  <span class="disabled">Older &rarr;</span>
+  {% endif %}
+</nav>
+{% else %}
+<p class="empty">No events yet. Wave at a camera.</p>
+{% endif %}
+{% endblock %}

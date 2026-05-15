@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Live{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>Live preview</h1>
+  <p class="subtle">Refreshing every {{ preview_refresh_seconds }}s. Grayscale because that's what the motion detector sees.</p>
+</section>
+
+<div class="preview-grid">
+  {% for cam in cameras %}
+  <figure class="preview-tile">
+    <img id="preview-{{ cam }}" src="{{ url_for('preview', camera_name=cam) }}?t=0" alt="{{ cam }} preview">
+    <figcaption>{{ cam | capitalize }}</figcaption>
+  </figure>
+  {% endfor %}
+</div>
+
+<script>
+  // Plain vanilla JS, no framework. Each <img> reloads from the /preview
+  // endpoint with a cache-busting query string so the browser always fetches
+  // the latest frame instead of using its cache.
+  (function () {
+    var refreshMs = {{ preview_refresh_seconds }} * 1000;
+    var cameras = {{ cameras | tojson }};
+    function refresh() {
+      var t = Date.now();
+      cameras.forEach(function (cam) {
+        var img = document.getElementById("preview-" + cam);
+        if (img) {
+          img.src = "{{ url_for('preview', camera_name='__CAM__') }}".replace("__CAM__", cam) + "?t=" + t;
+        }
+      });
+    }
+    setInterval(refresh, refreshMs);
+  })();
+</script>
+{% endblock %}

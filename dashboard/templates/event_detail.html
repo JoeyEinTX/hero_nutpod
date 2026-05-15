@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Event {{ event.id }}{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>Event #{{ event.id }}</h1>
+  <p class="subtle">
+    {{ event.timestamp }} &middot; {{ event.camera_name }} &middot;
+    <span class="badge badge-{{ event.event_type }}">{{ event.event_type }}</span>
+    {% if event.is_keeper %}<span class="badge badge-keeper">keeper</span>{% endif %}
+  </p>
+</section>
+
+<div class="detail-grid">
+  <div class="detail-media">
+    {% if event.snapshot_path %}
+    <figure>
+      <img class="full-snapshot" src="{{ url_for('snapshot', event_id=event.id) }}" alt="snapshot">
+      <figcaption class="subtle">Snapshot</figcaption>
+    </figure>
+    {% else %}
+    <p class="empty">No snapshot recorded.</p>
+    {% endif %}
+
+    {% if event.clip_path %}
+    <figure>
+      <video class="full-clip" controls preload="metadata"
+             src="{{ url_for('clip', event_id=event.id) }}">
+        Your browser does not support inline video. Download:
+        <a href="{{ url_for('clip', event_id=event.id) }}">clip</a>
+      </video>
+      <figcaption class="subtle">Clip</figcaption>
+    </figure>
+    {% else %}
+    <p class="empty subtle">Clip unavailable for this event.</p>
+    {% endif %}
+  </div>
+
+  <aside class="detail-meta">
+    <h2>Details</h2>
+    <dl>
+      <dt>Device</dt><dd>{{ event.device_name }}</dd>
+      <dt>Camera</dt><dd>{{ event.camera_name }}</dd>
+      <dt>Type</dt><dd>{{ event.event_type }}</dd>
+      <dt>Timestamp</dt><dd>{{ event.timestamp }}</dd>
+      <dt>Tags</dt><dd>{{ event.tags or '—' }}</dd>
+      <dt>Snapshot path</dt><dd class="path">{{ event.snapshot_path or '—' }}</dd>
+      <dt>Clip path</dt><dd class="path">{{ event.clip_path or '—' }}</dd>
+    </dl>
+
+    <div class="action-bar">
+      {% if event.is_keeper %}
+      <form method="post" action="{{ url_for('unkeep', event_id=event.id) }}">
+        <button type="submit" class="btn btn-secondary">Unmark as keeper</button>
+      </form>
+      {% else %}
+      <form method="post" action="{{ url_for('keep', event_id=event.id) }}">
+        <button type="submit" class="btn btn-primary">Mark as keeper</button>
+      </form>
+      {% endif %}
+      <a class="btn btn-link" href="{{ url_for('events_list') }}">&larr; Back to events</a>
+    </div>
+  </aside>
+</div>
+{% endblock %}

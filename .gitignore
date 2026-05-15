@@ -7,3 +7,6 @@ output/nutflix.db
 logs/*.log
 !output/snapshots/keepers/.gitkeep
 !output/clips/keepers/.gitkeep
+.claude/worktrees/
+.claude/settings.local.json
+output/preview/

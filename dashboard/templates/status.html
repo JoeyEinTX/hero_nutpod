@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Status{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>System status</h1>
+  <p class="subtle">{{ device_name }}</p>
+</section>
+
+<div class="status-grid">
+
+  <section class="status-card">
+    <h2>Service</h2>
+    <dl>
+      <dt>Uptime</dt>
+      <dd>
+        {% if uptime_seconds is not none %}
+          {{ uptime_seconds | int // 86400 }}d
+          {{ (uptime_seconds | int % 86400) // 3600 }}h
+          {{ (uptime_seconds | int % 3600) // 60 }}m
+          <span class="subtle">(via {{ uptime_source }})</span>
+        {% else %}
+          <span class="subtle">unavailable</span>
+        {% endif %}
+      </dd>
+      <dt>Total events</dt><dd>{{ total_events }}</dd>
+      <dt>output/ size</dt>
+      <dd>
+        {% set mb = (disk_bytes / (1024 * 1024)) %}
+        {% if mb > 1024 %}
+          {{ "%.1f" | format(mb / 1024) }} GB
+        {% else %}
+          {{ "%.1f" | format(mb) }} MB
+        {% endif %}
+      </dd>
+    </dl>
+  </section>
+
+  <section class="status-card">
+    <h2>Cameras</h2>
+    <dl>
+      {% for cam, ts in latest_heartbeats.items() %}
+      <dt>{{ cam | capitalize }} last heartbeat</dt>
+      <dd>{{ ts or '—' }}</dd>
+      {% endfor %}
+    </dl>
+  </section>
+
+  <section class="status-card">
+    <h2>IR emitters</h2>
+    {% if ir_enabled %}
+    <dl>
+      {% for cam, pin in ir_pins.items() %}
+      <dt>{{ cam | capitalize }} (GPIO {{ pin }})</dt>
+      <dd>
+        {% set state = ir_state.get(cam) %}
+        {% if state == 'on' %}
+          <span class="badge badge-on">ON</span>
+        {% elif state == 'off' %}
+          <span class="badge badge-off">off</span>
+        {% else %}
+          <span class="subtle">unknown</span>
+        {% endif %}
+      </dd>
+      {% endfor %}
+    </dl>
+    {% if ir_state.get('updated') %}
+    <p class="subtle">Last transition logged: {{ ir_state['updated'] }}</p>
+    {% endif %}
+    {% else %}
+    <p class="subtle">IR emitters disabled in config.</p>
+    {% endif %}
+  </section>
+
+  <section class="status-card">
+    <h2>Enclosure (BME280)</h2>
+    {% if sensor_enabled %}
+      {% if latest_sensor %}
+      <dl>
+        <dt>Temperature</dt>
+        <dd>
+          {% if latest_sensor[3] is not none %}
+            {{ "%.1f" | format(latest_sensor[3] * 9 / 5 + 32) }}°F /
+            {{ "%.1f" | format(latest_sensor[3]) }}°C
+          {% else %}—{% endif %}
+        </dd>
+        <dt>Humidity</dt>
+        <dd>{% if latest_sensor[4] is not none %}{{ "%.1f" | format(latest_sensor[4]) }}%{% else %}—{% endif %}</dd>
+        <dt>Pressure</dt>
+        <dd>{% if latest_sensor[5] is not none %}{{ "%.1f" | format(latest_sensor[5]) }} hPa{% else %}—{% endif %}</dd>
+        <dt>Reading time</dt><dd>{{ latest_sensor[1] }}</dd>
+      </dl>
+      {% else %}
+      <p class="subtle">No readings yet.</p>
+      {% endif %}
+    {% else %}
+    <p class="subtle">BME280 polling disabled in config.</p>
+    {% endif %}
+  </section>
+
+</div>
+{% endblock %}

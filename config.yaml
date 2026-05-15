@@ -45,3 +45,26 @@ paths:
   database: output/nutflix.db
   logs: logs
   keepers_subdir: keepers
+  preview: output/preview
+
+dashboard:
+  host: 0.0.0.0
+  port: 8080
+  preview_refresh_seconds: 2
+  events_per_page: 50
+
+sensors:
+  bme280:
+    enabled: true
+    i2c_address: 0x76
+    poll_interval_seconds: 300
+
+ir_emitter:
+  enabled: true
+  brightness_threshold: 50
+  threshold_smoothing_seconds: 30
+  cameras:
+    nestcam:
+      gpio_pin: 17
+    crittercam:
+      gpio_pin: 27
