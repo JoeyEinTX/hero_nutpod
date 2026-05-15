@@ -69,11 +69,15 @@ Initial Hero hardware assumptions:
 
 - Raspberry Pi 5
 - NVMe storage (recommended; SD card supported but discouraged for sustained writes)
-- 2 x IMX708 CSI cameras
+- 2 x IMX708 CSI cameras (NoIR)
 - Picamera2 backend
 - Local filesystem storage
 - Raspberry Pi OS
 - Sequential camera operation for reliability
+
+Phase 3 hardware additions:
+- BME280 environmental sensor (temperature, humidity, pressure) via I2C
+- 2 x IR LED emitter boards (Adafruit 940nm or equivalent), one per camera, GPIO-controlled
 
 Current camera roles (NutPod):
 - NestCam (interior)
@@ -227,17 +231,212 @@ paths:
   keepers_subdir: keepers
 ```
 
-This is the authoritative shape. AI assistants implementing Phase 2 must not introduce config keys beyond those listed.
+This is the authoritative shape for Phase 2. Phase 3 extends it with new top-level blocks (see Section 5.3) but does not modify existing keys.
+
+**Status: complete as of 2026-05-13.**
+
+## 5.3 Local Dashboard, Environmental Sensors & IR Illumination (Phase 3)
+
+Phase 3 makes the system observable. It adds a local web dashboard, environmental sensing via BME280, and infrared illumination for nighttime capture. All three share a hardware-to-software interface layer and a presentation layer, which is why they are scoped as one phase rather than three.
+
+Phase 3 also relaxes the most consequential ban so far: HTTP / web framework code becomes in-scope. To preserve the architectural discipline that has carried Phases 1 and 2, the dashboard runs as a *separate process* from the motion service. The motion service is critical-path and must not depend on or be destabilized by the dashboard.
+
+### Required functionality
+
+**Dashboard:**
+1. Run as a separate long-running systemd service alongside the motion service. Dashboard failures must not affect motion service operation.
+2. Serve an HTML interface on the LAN (no authentication; localhost or LAN access only — see Security boundary below).
+3. Provide three primary views:
+   - **Live** — current camera previews for NestCam and CritterCam, refreshed via simple `<img>` tag reload at the configured `preview_refresh_seconds` interval.
+   - **Events** — chronological list of recent events (motion + heartbeat) with thumbnail, timestamp, camera name, and clip play link. Paginated. One filter: by camera (NestCam only / CritterCam only / both).
+   - **Status** — system health: service uptime, last heartbeat per camera, latest sensor readings, IR emitter state per camera, disk usage, total event count.
+4. Allow marking any event's media file(s) as "keepers" via a UI control. Moves the file(s) into the appropriate `keepers/` subdirectory.
+5. Read-only access to clips via standard HTTP file serving (browser playback of `.mp4`).
+
+**Sensors:**
+6. Poll the BME280 at `poll_interval_seconds` (default 300 = every 5 min). Store each reading as a row in a new `sensor_readings` table.
+7. Sensor polling runs as a worker inside the motion service process (it shares the same hardware-access constraints).
+8. If the BME280 is absent or fails to initialize, log a warning and continue running. Sensor failures must not affect motion or dashboard operation.
+
+**IR Illumination:**
+9. Monitor scene brightness continuously from each camera's motion-sampling stream (free — uses the frames already being captured).
+10. When average frame brightness drops below `brightness_threshold` for `threshold_smoothing_seconds`, switch that camera's IR emitter GPIO HIGH. When brightness rises back above the threshold for the same smoothing window, switch the GPIO LOW.
+11. IR emitter state is per-camera (each camera has its own GPIO pin and its own brightness reading).
+12. If GPIO is unavailable or `ir_emitter.enabled` is false, log and skip silently.
+
+### NOT in Phase 3
+
+- No live video streaming (MJPEG, HLS, WebSocket, etc.). Preview is still-image refresh only.
+- No authentication, user accounts, or password protection (Phase 5 when the platform layer is built).
+- No remote access, port forwarding, or cloud sync (Phase 5).
+- No AI classification or wildlife identification (Phase 4).
+- No WebSocket connections, server-sent events, or any real-time push from server to browser. Refreshes are client-initiated.
+- No Flask-SocketIO, Flask-Login, Flask-SQLAlchemy, or other Flask extensions beyond the base framework. Stdlib `sqlite3` continues to handle persistence.
+
+### Security boundary
+
+The dashboard has no authentication by design (per the local-first principle). Operators must:
+
+- Bind the dashboard to LAN-accessible addresses only (`host: 0.0.0.0` is acceptable on trusted home networks; `host: 127.0.0.1` plus SSH tunneling is recommended otherwise).
+- Never expose the dashboard port to the public internet via port forwarding, UPnP, or reverse proxy.
+- Treat the LAN as a trust boundary. Any device with network access to the Pi can view all footage and toggle keepers.
+
+The README must restate these requirements explicitly.
+
+### Live preview frame source
+
+The dashboard does not open its own Picamera2 instance (which would conflict with the motion service). Instead, each `CameraWorker` in the motion service writes its current grayscale lores frame to `output/preview/{camera_name}.jpg` every `preview_refresh_seconds` seconds. The dashboard serves these files via a standard route.
+
+Preview frames are:
+- **Grayscale** (the Y plane of the lores YUV stream, converted directly to JPEG via PIL). This honestly represents what the motion detector sees.
+- **Overwritten in place** (no history retained for previews).
+- **Excluded from retention** (the retention script does not scan `output/preview/`).
+- **Excluded from version control** (added to `.gitignore`).
+
+Preview file path is fixed: `output/preview/{display_name}.jpg`. The dashboard route `/preview/{camera_name}` returns the corresponding file with appropriate cache headers (`Cache-Control: no-store`) so browser refresh always shows the latest frame.
+
+### Dashboard route plan
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/` | Redirect to `/live` |
+| GET | `/live` | Live view page |
+| GET | `/events` | Event list (paginated, optional `?camera=` filter) |
+| GET | `/events/<id>` | Single event detail page with embedded clip player |
+| GET | `/status` | System status page |
+| GET | `/preview/<camera_name>` | Latest preview frame (JPEG) |
+| GET | `/snapshot/<id>` | Event snapshot file (JPEG) |
+| GET | `/clip/<id>` | Event clip file (MP4) |
+| POST | `/events/<id>/keep` | Move event's snapshot + clip to keepers/ |
+| POST | `/events/<id>/unkeep` | Move event's snapshot + clip back out of keepers/ |
+
+All routes return HTML except for the file-serving routes and POSTs (which redirect back to the referrer after action).
+
+### BME280 protocol and driver
+
+The BME280 is a Bosch I2C sensor at address `0x76` or `0x77` (board-dependent). It produces 16-bit + 20-bit raw readings that require calibration via factory-programmed coefficients read from the chip itself.
+
+**Driver implementation:** an in-repo `sensors/bme280.py` using stdlib `smbus2` (apt: `python3-smbus2`). No external Adafruit / circuit-python dependency. ~80 lines including calibration math from the Bosch datasheet. This keeps Phase 3 dependency-clean and matches the Phase 1/2 philosophy of minimal external libraries.
+
+**Where BME280 lives physically:** inside the SquirrelBox enclosure. Dashboard labels for the reading should make this clear ("Enclosure: 72°F / 45% RH") so the operator understands it is not outdoor weather data.
+
+### IR emitter control
+
+Each Adafruit 940nm IR emitter board takes three connections to the Pi:
+
+| Board Pin | Pi Pin | Notes |
+|-----------|--------|-------|
+| V+ | 3.3V or 5V rail | 5V brighter, 3.3V safer |
+| GND | GND rail | |
+| In | A GPIO pin | Driven HIGH to emit |
+
+Configuration assigns one GPIO pin per camera. The Pi 5's BCM GPIO numbering is used throughout.
+
+The brightness-detection algorithm: each `CameraWorker` maintains a rolling average of mean frame brightness (the mean of the Y plane). When the smoothed average crosses `brightness_threshold` (downward or upward) and stays there for `threshold_smoothing_seconds`, the IR GPIO is toggled. The smoothing prevents thrashing from clouds passing or a porch light flickering.
+
+**Library:** `gpiozero` (apt: `python3-gpiozero`, preinstalled on Pi OS). Use `DigitalOutputDevice` for clean on/off semantics. RPi.GPIO is also acceptable but `gpiozero` has a friendlier API for this use case.
+
+### SQLite schema additions
+
+A new table alongside the existing `events` table. Both live in the same `nutflix.db` file:
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | INTEGER PRIMARY KEY | autoincrement |
+| timestamp | TEXT | ISO-8601 |
+| device_name | TEXT | e.g. "Hero" |
+| temperature_c | REAL | nullable |
+| humidity_percent | REAL | nullable |
+| pressure_hpa | REAL | nullable |
+
+Reading values are nullable because a partial sensor failure may produce only some of the three. NULL is the explicit "we don't know" signal.
+
+Two processes (motion service and dashboard) accessing the same SQLite file is safe — SQLite handles concurrent access via filesystem locking. Each process opens its own connection.
+
+### Retention policy additions
+
+| Content | Default window |
+|---------|----------------|
+| Sensor readings | Forever (no automatic pruning) |
+| Preview frames | n/a (overwritten in place, no accumulation) |
+
+Sensor readings are tiny (~50 bytes per row, ~288 rows/day at 5-min polling = ~14KB/day). No retention pressure for years.
+
+### Concurrency policy (Phase 3)
+
+The motion service process retains its Phase 2 model: one worker thread per camera, plus a main thread. Phase 3 adds:
+
+- **Sensor polling thread** inside the motion service. Wakes every `poll_interval_seconds`, reads BME280, writes a row, sleeps. One thread total (the BME280 is one device, not per-camera).
+- **Brightness monitoring** runs inside each existing `CameraWorker`. No new threads. It's a few extra lines added to the motion tick.
+- **IR emitter toggling** runs inside each `CameraWorker`. No new threads. Driven by the brightness monitor's output.
+
+The dashboard process is a *separate Python process* started by its own systemd unit. It runs single-threaded Flask development server in production (gunicorn is not required at this scale — one user, low request rate). No threading inside the dashboard process either.
+
+### Reference `config.yaml` additions for Phase 3
+
+The Phase 2 reference config remains unchanged. Phase 3 appends three new top-level blocks and one addition to `paths`:
+
+```yaml
+dashboard:
+  host: 0.0.0.0
+  port: 8080
+  preview_refresh_seconds: 2
+  events_per_page: 50
+
+sensors:
+  bme280:
+    enabled: true
+    i2c_address: 0x76
+    poll_interval_seconds: 300
+
+ir_emitter:
+  enabled: true
+  brightness_threshold: 50
+  threshold_smoothing_seconds: 30
+  cameras:
+    nestcam:
+      gpio_pin: 17
+    crittercam:
+      gpio_pin: 27
+
+paths:
+  # ... existing keys preserved ...
+  preview: output/preview
+```
+
+This is the authoritative shape. AI assistants implementing Phase 3 must not introduce config keys beyond those listed.
+
+### Visual design language for the dashboard
+
+Phase 3 borrows the Nutflix brand's design system without recreating the marketing site:
+
+- **Color palette:** cream background (~`#FAF3E4`), warm browns (~`#8A4B2A`), olive greens (~`#6B7F3A`, `#4E5E29`), near-black text (~`#2B1D14`). Saturated earth tones, not muddy nature-doc tones.
+- **Typography:** system sans-serif stack with Helvetica Neue / Helvetica / Arial fallbacks. Heavy weights (700–900) for headings, normal (400) for body. Negative letter-spacing on large headlines for the brand wordmark.
+- **Voice:** dry, confident, slightly playful, never twee. "Latest events" not "Wildlife observations"; "Mark as keeper" not "Save permanently to favorites archive."
+- **Layout:** dense and information-rich is acceptable. This is an operator tool, not a marketing page. Prioritize legibility and quick scanning over visual flourish.
+
+A minimal `dashboard/static/style.css` codifies these tokens. No CSS framework (no Bootstrap, no Tailwind). Hand-written CSS that any future maintainer can read and edit in one sitting.
+
+### Migration from Phase 2
+
+Phase 3 does not break Phase 2. The motion service continues to operate identically. Three additive code changes touch Phase 2 files:
+
+- `service.py` — spawns a sensor polling thread on startup, joins it on shutdown. Skips gracefully if `sensors.bme280.enabled` is false or the BME280 is absent.
+- `cameras/camera_manager.py` — `CameraWorker` gains a brightness monitor, a preview-frame writer, and an IR emitter handle. All additive. Existing motion / heartbeat / clip logic is unchanged.
+- `config.yaml` — adds the three new blocks plus the `preview` path.
+
+The existing `nutflix.service` systemd unit continues to point at `service.py`. A new `nutflix-dashboard.service` unit is added for the dashboard process. Both are enabled and started independently.
 
 ## 6. Folder Structure
 
-Combined structure across Phase 1 and Phase 2. New entries in Phase 2 are noted in the prose summary below.
+Combined structure across Phase 1, Phase 2, and Phase 3. Phase 3 additions are noted in the prose summary below.
 
 ```
 hero_nutpod/
 ├── main.py
 ├── service.py
 ├── retention.py
+├── dashboard.py
 ├── config.yaml
 ├── cameras/
 │   ├── __init__.py
@@ -246,9 +445,30 @@ hero_nutpod/
 ├── motion/
 │   ├── __init__.py
 │   └── detector.py
+├── sensors/
+│   ├── __init__.py
+│   ├── bme280.py
+│   └── brightness.py
+├── ir/
+│   ├── __init__.py
+│   └── emitter.py
 ├── storage/
 │   ├── __init__.py
-│   └── event_log.py
+│   ├── event_log.py
+│   └── sensor_log.py
+├── dashboard/
+│   ├── __init__.py
+│   ├── app.py
+│   ├── routes.py
+│   ├── templates/
+│   │   ├── base.html
+│   │   ├── live.html
+│   │   ├── events.html
+│   │   ├── event_detail.html
+│   │   └── status.html
+│   └── static/
+│       ├── style.css
+│       └── nutflix.svg
 ├── utils/
 │   ├── __init__.py
 │   ├── config_loader.py
@@ -256,26 +476,29 @@ hero_nutpod/
 ├── systemd/
 │   ├── nutflix.service
 │   ├── nutflix-retention.service
-│   └── nutflix-retention.timer
+│   ├── nutflix-retention.timer
+│   └── nutflix-dashboard.service
 ├── output/
 │   ├── snapshots/
 │   │   └── keepers/
 │   ├── clips/
 │   │   └── keepers/
+│   ├── preview/
 │   └── nutflix.db
 └── logs/
 ```
 
-Phase 2 additions:
-- `service.py` — long-running motion service entry point
-- `retention.py` — cleanup script run by systemd timer
-- `motion/detector.py` — motion detection logic
-- `storage/event_log.py` — SQLite event log interface
-- `systemd/*` — unit files for the always-running service and the retention timer/service pair
-- `output/*/keepers/` — permanent-save subdirectories exempt from retention
-- `output/nutflix.db` — SQLite event log
+Phase 3 additions:
+- `dashboard.py` — dashboard process entry point (starts the Flask app)
+- `dashboard/` — Flask app, routes, templates, static assets
+- `sensors/bme280.py` — in-repo BME280 driver via smbus2
+- `sensors/brightness.py` — frame-brightness monitoring for IR control decisions
+- `ir/emitter.py` — GPIO control for the IR LED boards
+- `storage/sensor_log.py` — SQLite interface for the `sensor_readings` table
+- `systemd/nutflix-dashboard.service` — long-running unit for the dashboard process
+- `output/preview/` — ephemeral preview frames (overwritten every 2s, gitignored)
 
-`main.py` is retained as a one-shot capture utility for testing and diagnostics.
+`main.py` is still retained as a one-shot capture utility for testing and diagnostics.
 
 ## 7. Architectural Principles
 
@@ -308,6 +531,8 @@ Rules:
 4. Python files use lowercase_with_underscores
 5. Camera role names remain fixed per device type:
    - NutPod: NestCam, CritterCam
+6. Dashboard route paths are lowercase, hyphenated where multi-word (`/events`, `/event-detail` if needed). No trailing slashes.
+7. HTML template files use lowercase_with_underscores and `.html` extension.
 
 Saved media naming:
 `<DeviceName>_<CameraName>_<Timestamp>.<ext>`
@@ -316,6 +541,10 @@ Examples:
 - `Hero_NestCam_2026-05-12_21-34-35.jpg` (Phase 1 snapshot)
 - `Hero_CritterCam_2026-05-12_21-34-35.jpg` (Phase 1 snapshot)
 - `Hero_NestCam_2026-05-15_08-12-04.mp4` (Phase 2 motion clip)
+
+Preview frame naming (Phase 3, no timestamp because it's overwritten in place):
+- `nestcam.jpg`
+- `crittercam.jpg`
 
 Snapshot and clip filenames produced by the same motion event share a timestamp.
 
@@ -331,10 +560,13 @@ AI assistants working on this project should:
 
 ### Banned across all phases (until explicitly relaxed in a future phase)
 
-- Flask, FastAPI, or any other web framework or HTTP interface (Phase 3 may introduce a lightweight dashboard)
 - AI / ML inference (Phase 4)
-- Cloud sync, remote storage, or any external networking (Phase 5)
+- Cloud sync, remote storage, or external networking (Phase 5)
 - Distributed systems patterns (Phase 5)
+- Flask extensions beyond base Flask: Flask-SocketIO, Flask-SQLAlchemy, Flask-Login, etc. (Phase 5 may revisit if user accounts are needed)
+- Real-time push from server to client: WebSockets, Server-Sent Events, long polling (Phase 4+ if ever needed)
+- Frontend frameworks: React, Vue, Svelte, etc. The dashboard is server-rendered HTML with minimal vanilla JS.
+- CSS frameworks: Bootstrap, Tailwind, Bulma, etc. The dashboard uses hand-written CSS.
 
 ### In scope as of Phase 2
 
@@ -342,34 +574,46 @@ AI assistants working on this project should:
 - SQLite database (single file, in-process; no client-server DBs)
 - Minimal threading, only where required for parallel per-camera motion monitoring
 
+### In scope as of Phase 3
+
+- Flask (base framework only, no SocketIO, no async)
+- HTTP serving on the local network (no external exposure)
+- GPIO output via gpiozero
+- I2C sensor reading via smbus2
+- A small amount of vanilla JavaScript for dashboard interactivity (form submissions, image refresh timers). No JS frameworks, no transpilation, no build step.
+- Hand-written CSS
+
 The bans list narrows as phases progress. Anything not explicitly in scope for the current phase is out of scope.
 
 ## 10. Future Expansion Roadmap
 
 Planned future phases:
 
-Phase 2 (specified in detail in Section 5.2):
+Phase 2 (Section 5.2):
 - Motion-triggered capture
 - Video clip recording with pre/post-roll
 - Heartbeat snapshots
 - SQLite event log
 - Retention management
 
-Phase 3:
-- Lightweight local dashboard
-- Device health monitoring
-- Environmental sensors (BME280)
-- Live preview
+Phase 3 (Section 5.3):
+- Local Flask dashboard
+- BME280 environmental sensing
+- IR illumination for nighttime capture
+- Brightness-aware IR control
+- Keeper marking via UI
 
 Phase 4:
 - AI classification
 - Wildlife tagging
-- Event filtering
+- Event filtering by species
 - Smart notifications
+- MJPEG / live video streaming (if useful by then)
 
 Phase 5:
 - Multi-device management
 - Nutflix cloud/network architecture
+- User accounts and authentication
 - Shared wildlife feeds
 - Community ecosystem
 
@@ -391,3 +635,4 @@ Every layer should have a clear purpose.
 |------|---------|
 | 2026-05-08 | NutPod/NutNode split clarified (NutPod = device type, NutNode = electronics module). BirdBox added as future device type. Camera role names scoped per device type rather than global. Phase 2+ note added to .mp4 naming example. |
 | 2026-05-12 | Phase 1 marked complete. Section 5.2 added with full Phase 2 specification: motion-triggered capture, video clips with pre/post-roll, heartbeat snapshots, SQLite event log, retention policy with keepers exemption, systemd service model. Section 6 folder structure expanded. Section 8 naming examples updated to include clip filename. Section 9 reorganized into permanent bans vs. per-phase scope. NVMe noted as recommended storage in Section 4. |
+| 2026-05-14 | Phase 2 marked complete. Section 5.3 added with full Phase 3 specification: local Flask dashboard (separate process, no auth, LAN-only), BME280 environmental sensing via in-repo smbus2 driver, IR illumination via Adafruit 940nm boards with brightness-aware GPIO toggling, preview-frame architecture for live view, sensor_readings SQLite table, keeper marking via UI. Section 4 lists Phase 3 hardware additions (BME280, IR emitters). Section 6 folder structure expanded. Section 8 adds rules for dashboard route and template naming. Section 9 relaxes for Flask + GPIO + I2C in scope, explicitly bans Flask extensions and real-time push. Section 10 Phase 3 entry now points to 5.3. |
