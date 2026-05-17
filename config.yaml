@@ -16,12 +16,13 @@ capture:
     resolution: [4608, 2592]
   clip:
     resolution: [2304, 1296]
-    framerate: 30
+    framerate: 15
     pre_roll_seconds: 5
     post_roll_seconds: 10
   motion_sampling:
     resolution: [1536, 864]
-    framerate: 30
+    framerate: 15
+  awb_mode: daylight
 
 heartbeat:
   interval_minutes: 15

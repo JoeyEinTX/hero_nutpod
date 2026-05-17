@@ -49,6 +49,20 @@ CAMERA_DISPLAY_NAMES = {
 }
 
 
+# AWB preset name -> libcamera AwbMode enum value. Auto wanders, especially
+# on IMX708 NoIR (no IR-cut filter means IR bleeds into the red channel and
+# pulls auto-WB warm); pinning to a fixed preset keeps clip color consistent.
+AWB_MODE_VALUES = {
+    "auto": 0,
+    "tungsten": 1,
+    "fluorescent": 2,
+    "indoor": 3,
+    "daylight": 4,
+    "cloudy": 5,
+    "custom": 6,
+}
+
+
 # ---------------------------------------------------------------------------
 # Phase 1: one-shot capture (kept for main.py / diagnostics).
 # ---------------------------------------------------------------------------
@@ -103,13 +117,15 @@ class MotionCamera:
     full-resolution still capture for snapshots."""
 
     def __init__(self, port, snapshot_resolution, clip_resolution,
-                 motion_resolution, framerate, pre_roll_seconds, logger):
+                 motion_resolution, framerate, pre_roll_seconds, awb_mode,
+                 logger):
         self.port = port
         self.snapshot_resolution = tuple(snapshot_resolution)
         self.clip_resolution = tuple(clip_resolution)
         self.motion_resolution = tuple(motion_resolution)
         self.framerate = int(framerate)
         self.pre_roll_seconds = int(pre_roll_seconds)
+        self.awb_mode = str(awb_mode)
         self.logger = logger
 
         self._picam2 = None
@@ -126,9 +142,22 @@ class MotionCamera:
         from picamera2.outputs import CircularOutput
 
         self._picam2 = Picamera2(self.port)
+        # Pin the framerate by setting FrameDurationLimits to a fixed value
+        # (min=max). Without this Picamera2 runs at its default rate and
+        # under CPU load may drop frames silently — the resulting .mp4 is
+        # tagged with the configured fps but contains fewer frames, so
+        # playback looks sped up.
+        frame_duration_us = int(1_000_000 / self.framerate)
+        awb_value = AWB_MODE_VALUES.get(
+            self.awb_mode.lower(), AWB_MODE_VALUES["auto"]
+        )
         self._video_config = self._picam2.create_video_configuration(
             main={"size": self.clip_resolution, "format": "RGB888"},
             lores={"size": self.motion_resolution, "format": "YUV420"},
+            controls={
+                "FrameDurationLimits": (frame_duration_us, frame_duration_us),
+                "AwbMode": awb_value,
+            },
         )
         self._picam2.configure(self._video_config)
 
@@ -476,6 +505,7 @@ def build_workers(config, event_log, stop_event, logger):
     snapshot_resolution = config["capture"]["snapshot"]["resolution"]
     clip_cfg = config["capture"]["clip"]
     motion_cfg = config["capture"]["motion_sampling"]
+    awb_mode = config["capture"].get("awb_mode", "auto")
 
     pixel_threshold, area_threshold_percent = resolve_motion_thresholds(config)
     cooldown_seconds = config["motion"]["cooldown_seconds"]
@@ -504,6 +534,7 @@ def build_workers(config, event_log, stop_event, logger):
             motion_resolution=motion_cfg["resolution"],
             framerate=clip_cfg["framerate"],
             pre_roll_seconds=clip_cfg["pre_roll_seconds"],
+            awb_mode=awb_mode,
             logger=logger,
         )
         detector = MotionDetector(
