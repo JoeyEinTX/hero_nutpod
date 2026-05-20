@@ -14,6 +14,8 @@
   --ink-soft: #5A4838;
   --rule: #E0D2B6;
   --warn: #B5503D;
+  --brick: #8C3A26;
+  --brick-deep: #6E2C1C;
 }
 
 * { box-sizing: border-box; }
@@ -218,6 +220,12 @@ p { margin: 0 0 0.6em 0; }
   padding: 6px 0;
 }
 .btn-link:hover { background: transparent; text-decoration: underline; }
+.btn-danger {
+  background: var(--brick);
+  border-color: var(--brick);
+  color: var(--cream);
+}
+.btn-danger:hover { background: var(--brick-deep); border-color: var(--brick-deep); }
 
 /* ---------- event detail ---------- */
 

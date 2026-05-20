@@ -142,6 +142,16 @@ class EventLog:
             row = cur.fetchone()
         return row[0] if row else None
 
+    def delete_event(self, event_id):
+        """Permanently remove one event row. Caller is responsible for any
+        on-disk media; this only touches the database."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM events WHERE id = ?",
+                (int(event_id),),
+            )
+            self._conn.commit()
+
     def update_paths(self, event_id, snapshot_path, clip_path):
         """Rewrite snapshot_path and clip_path for one event. Used after a
         keeper move (or reverse). NULL is preserved when the corresponding

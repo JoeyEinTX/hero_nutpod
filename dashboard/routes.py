@@ -146,6 +146,33 @@ def register_routes(app):
         _move_event_files(event_id, to_keepers=False)
         return _redirect_back(event_id)
 
+    @app.route("/events/<int:event_id>/delete", methods=["POST"])
+    def delete_event(event_id):
+        log = _event_log()
+        row = log.get_event_by_id(event_id)
+        if row is None:
+            return redirect(url_for("events_list"))
+        logger = _logger()
+        for path_str in (row[5], row[6]):
+            if not path_str:
+                continue
+            target = Path(path_str)
+            if target.exists():
+                try:
+                    target.unlink()
+                    logger.info(f"delete event {event_id}: removed {target}")
+                except OSError as e:
+                    logger.error(
+                        f"delete event {event_id}: failed to remove {target}: {e}"
+                    )
+            else:
+                logger.warning(
+                    f"delete event {event_id}: file missing on disk: {target}"
+                )
+        log.delete_event(event_id)
+        logger.info(f"delete event {event_id}: row removed")
+        return redirect(url_for("events_list"))
+
 
 # ---------------------------------------------------------------------------
 # Helpers

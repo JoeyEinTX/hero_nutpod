@@ -57,6 +57,10 @@
         <button type="submit" class="btn btn-primary">Mark as keeper</button>
       </form>
       {% endif %}
+      <form method="post" action="{{ url_for('delete_event', event_id=event.id) }}"
+            onsubmit="return confirm({% if event.is_keeper %}'This event is marked as a keeper. Permanently delete it and its media anyway? This cannot be undone.'{% else %}'Permanently delete this event and its media? This cannot be undone.'{% endif %});">
+        <button type="submit" class="btn btn-danger">Delete</button>
+      </form>
       <a class="btn btn-link" href="{{ url_for('events_list') }}">&larr; Back to events</a>
     </div>
   </aside>
