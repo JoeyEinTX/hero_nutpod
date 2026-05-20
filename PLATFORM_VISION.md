@@ -74,7 +74,42 @@ Turn potential brand confusion into memorable viral differentiation.
 
 ---
 
-## 4. Attract Pack Strategy
+## 4. Hardware Engineering Roadmap
+
+The current generation of NutNode electronics runs on stock Raspberry Pi 5 retail boards inside a custom SquirrelBox enclosure. This is the right answer for early product iteration — stock parts, full community support, every line of code in the project runs without modification. It constrains us in three ways though: the form factor wastes real estate on connectors and IO we don't use, the onboard WiFi antenna is internal and limited in range (a real problem for deployment in tree-mounted enclosures across a backyard), and the per-unit BOM cost is higher than it needs to be at scale.
+
+### v2: Pi Compute Module 5 + custom carrier board
+
+The next hardware iteration is the Raspberry Pi Compute Module 5 (CM5) on a custom carrier board designed specifically for the NutPod. The CM5 uses the same SoC and software stack as the Pi 5 — meaning every line of code currently in the project runs unchanged — but strips the board to just the chip plus RAM and optional eMMC, exposed via a 100-pin edge connector.
+
+The carrier board then exposes only the IO we actually use:
+- Two CSI camera ports
+- I2C for the BME280 environmental sensor
+- GPIO for the IR emitters
+- USB-A for future expansion (microphone, secondary storage)
+- Power input compatible with both wall and Solar Battery Box
+
+The headline feature is the **U.FL antenna connector on the CM5 itself.** Pairing it with an SMA pigtail and a small external antenna mounted on the SquirrelBox exterior solves the marginal-WiFi problem that is currently the biggest practical limitation of outdoor deployment. Realistic WiFi range improves from "edge of the home network" to "comfortable across walls and yards."
+
+Per-unit BOM also drops meaningfully: CM5 starts around $45 (4GB, no eMMC) vs ~$80 for a Pi 5 retail board, and the carrier board strips out USB hubs, HDMI controllers, the SD card slot, and other components the sealed product doesn't need.
+
+### Speculative: fully custom electronics
+
+A fully custom PCB with a non-Pi SoC would give total hardware control, but it requires months of electrical engineering work, risks losing compatibility with the Linux + Picamera2 stack that the entire project depends on, and offers no clear functional advantage over the CM5 path for this product. **Not a current consideration.** Possible only if NutPod ever reaches production volumes where the per-unit BOM savings justify the multi-month engineering investment.
+
+### Triggering conditions for hardware redesign
+
+Hardware redesign should not begin before:
+
+- Phase 4 (AI classification) is at least underway and the inference workload's CPU/RAM requirements are known.
+- Multiple NutPods have been deployed outdoors for long enough to surface real-world learnings: enclosure thermals, IR illumination reach, BME280 placement, antenna gain requirements, weatherproofing failures.
+- A clear product-line decision has been made — i.e., NutPod has moved from "personal project" to "product I plan to sell."
+
+Going to custom hardware too early locks design decisions in before we know which ones matter. The Pi 5 retail board is the right development platform; the CM5 is the right production platform; the time to switch is when product-market learnings are in.
+
+---
+
+## 5. Attract Pack Strategy
 
 ### The Problem
 New users don't know how to attract squirrels to their SquirrelBox. Empty boxes = no footage = unhappy customers.
@@ -107,7 +142,7 @@ New users don't know how to attract squirrels to their SquirrelBox. Empty boxes 
 
 ---
 
-## 5. Customer Education Philosophy
+## 6. Customer Education Philosophy
 
 ### Key Messages
 
@@ -136,7 +171,7 @@ New users don't know how to attract squirrels to their SquirrelBox. Empty boxes 
 
 ---
 
-## 6. Platform Features Roadmap
+## 7. Platform Features Roadmap
 
 ### Phase 1: Local Only
 - Personal monitoring dashboard
@@ -164,7 +199,7 @@ New users don't know how to attract squirrels to their SquirrelBox. Empty boxes 
 
 ---
 
-## 7. Marketing & Positioning
+## 8. Marketing & Positioning
 
 ### Taglines (Brainstorm)
 - "OnlyFans, but for squirrels"
@@ -190,7 +225,7 @@ New users don't know how to attract squirrels to their SquirrelBox. Empty boxes 
 
 ---
 
-## 8. Revenue Streams
+## 9. Revenue Streams
 
 1. **Hardware Sales** - NutPod, SquirrelBox, Solar Battery Box
 2. **Subscriptions** - Viewer and Premium tiers
@@ -200,7 +235,7 @@ New users don't know how to attract squirrels to their SquirrelBox. Empty boxes 
 
 ---
 
-## 9. Long-Term Vision
+## 10. Long-Term Vision
 
 Nutflix starts with squirrels but the model scales to:
 - Bird watching
@@ -219,6 +254,7 @@ The core insight: **People want to connect with nature, share what they see, and
 |------|---------|
 | 2025-01-15 | Initial creation from architecture brainstorming sessions |
 | 2026-05-08 | Aligned product table with technical doc (NutPod = device, NutNode = electronics module). Fixed cross-reference filename. |
+| 2026-05-17 | Added Section 4 (Hardware Engineering Roadmap) documenting the CM5 + custom carrier board path as the v2 hardware direction. Notes external U.FL antenna as the headline feature solving the current marginal-WiFi limitation. Full custom PCB explicitly deferred. Subsequent sections renumbered. |
 
 ---
 
