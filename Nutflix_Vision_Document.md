@@ -28,18 +28,27 @@ Platform:
 
 Hardware Device Types (current):
 - NutPod
-- ScoutPod
-- GroundPod
 
 Hardware Device Types (future):
+- ScoutPod
+- GroundPod
 - BirdBox
 - Others TBD
 
-Enclosure:
-- SquirrelBox
+Enclosures:
+- SquirrelBox = wooden enclosure used by NutPod
+- (other device types will have differently-named enclosures appropriate to their use case)
 
-Electronics Module:
-- NutNode
+Electronics modules (one per device type):
+
+A "node" is the electronics module that lives inside a device. Each device type has its own concrete node, designed for that device's specific use case (different cameras, sensors, mounting, viewing angles, power profiles). What nodes share across the ecosystem is the Nutflix *software stack* and the *event/data conventions* that connect them to the platform — not the hardware itself.
+
+- NutNode — electronics inside a NutPod
+- ScoutNode — electronics inside a ScoutPod (future)
+- GroundNode — electronics inside a GroundPod (future)
+- BirdNode — electronics inside a BirdBox (future)
+
+The collection of all nodes across all devices forms the Nutwork.
 
 NutPod camera roles:
 - NestCam = interior camera
@@ -65,7 +74,7 @@ Every new layer should be added only after the previous layer is stable.
 
 ## 4. Current Hardware Foundation
 
-Initial Hero hardware assumptions:
+Initial Hero hardware assumptions (NutNode):
 
 - Raspberry Pi 5
 - NVMe storage (recommended; SD card supported but discouraged for sustained writes)
@@ -82,6 +91,8 @@ Phase 3 hardware additions:
 Current camera roles (NutPod):
 - NestCam (interior)
 - CritterCam (exterior)
+
+Future device types (ScoutPod, GroundPod, BirdBox) will define their own node hardware appropriate to their use case. The NutNode design above is not intended to be reused across device types.
 
 ## 5. Minimal Camera Foundation (Phase 1)
 
@@ -636,3 +647,4 @@ Every layer should have a clear purpose.
 | 2026-05-08 | NutPod/NutNode split clarified (NutPod = device type, NutNode = electronics module). BirdBox added as future device type. Camera role names scoped per device type rather than global. Phase 2+ note added to .mp4 naming example. |
 | 2026-05-12 | Phase 1 marked complete. Section 5.2 added with full Phase 2 specification: motion-triggered capture, video clips with pre/post-roll, heartbeat snapshots, SQLite event log, retention policy with keepers exemption, systemd service model. Section 6 folder structure expanded. Section 8 naming examples updated to include clip filename. Section 9 reorganized into permanent bans vs. per-phase scope. NVMe noted as recommended storage in Section 4. |
 | 2026-05-14 | Phase 2 marked complete. Section 5.3 added with full Phase 3 specification: local Flask dashboard (separate process, no auth, LAN-only), BME280 environmental sensing via in-repo smbus2 driver, IR illumination via Adafruit 940nm boards with brightness-aware GPIO toggling, preview-frame architecture for live view, sensor_readings SQLite table, keeper marking via UI. Section 4 lists Phase 3 hardware additions (BME280, IR emitters). Section 6 folder structure expanded. Section 8 adds rules for dashboard route and template naming. Section 9 relaxes for Flask + GPIO + I2C in scope, explicitly bans Flask extensions and real-time push. Section 10 Phase 3 entry now points to 5.3. |
+| 2026-05-17 | Reframed the "electronics module" concept in Section 2: each device type has its own node (NutNode in NutPod, ScoutNode in ScoutPod, etc.) rather than a single shared module reused across device types. Reorganized device types into current (NutPod) vs future (ScoutPod, GroundPod, BirdBox) to reflect actual product status. Added note that the Nutwork is the collection of all nodes across all devices. Section 4 hardware foundation labeled explicitly as NutNode hardware and notes that future device types will define their own node hardware. No code changes — "NutNode" never appeared as a code identifier; the reframe is conceptual only. |

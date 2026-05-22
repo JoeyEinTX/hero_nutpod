@@ -16,11 +16,12 @@ The branded experience, website, and app where wildlife videos can be shared, vi
 - Like, comment, and engage with content
 
 ### Nutwork = The Network
-The underlying distributed collection of all shared SquirrelBoxes.
+The underlying distributed collection of all device nodes.
 
-- Conceptually, users who share to Nutflix make their box part of the Nutwork
-- Think of it as the infrastructure layer beneath the consumer platform
-- Marketing hook: **"Your SquirrelBox joins the Nutwork when you share!"**
+- Every Nutflix device contains a *node* — the electronics module that makes the device part of the Nutwork
+- A NutPod owner's NutNode joins the Nutwork; a future BirdBox owner's BirdNode joins it the same way
+- The platform layer treats all nodes uniformly through the shared event/data conventions
+- Marketing hook: **"Your device joins the Nutwork when you share!"**
 
 ---
 
@@ -53,24 +54,28 @@ Turn potential brand confusion into memorable viral differentiation.
 
 | Product | Description |
 |---------|-------------|
-| **NutPod** | Squirrel-focused observation device (SquirrelBox + NutNode) |
-| **NutNode** | Main electronics module — Raspberry Pi 5, dual cameras, sensors. Reused across all device types. |
-| **SquirrelBox** | Premium wood enclosure with plexiglass viewing window |
+| **NutPod** | Squirrel-focused observation device (SquirrelBox + NutNode). Customer-facing product. |
+| **SquirrelBox** | Premium wood enclosure with plexiglass viewing window. Component of NutPod. |
 | **Solar Battery Box (SBB)** | Off-grid power system (1S4P 21700 Li-ion, MPPT charging) |
+
+The **NutNode** is the electronics module inside a NutPod (Pi 5, dual cameras, sensors, IR emitters). It is *not* sold as a standalone product — it ships only as the integrated brain of a NutPod. Repair and upgrade swaps may be supported in the future, but a NutNode is not something a customer purchases to assemble into something else.
 
 ### Future Variants (Planned)
 
-| Product | Concept |
-|---------|---------|
-| **ScoutPod** | Lightweight/portable variant for scouting locations |
-| **GroundPod** | Ground-level variant for different wildlife |
-| **BirdBox** | Species-specific variant for bird watching |
+Each future device type will have its own purpose-built electronics module ("node"), designed for its specific use case rather than reusing the NutNode. The Nutwork unifies them at the *software and data* layer, not the hardware layer.
+
+| Product | Concept | Node |
+|---------|---------|------|
+| **ScoutPod** | Lightweight/portable variant for scouting locations | ScoutNode |
+| **GroundPod** | Ground-level variant for different wildlife (e.g., 360° approach camera + dedicated feed camera) | GroundNode |
+| **BirdBox** | Species-specific variant for bird watching | BirdNode |
 
 ### Hardware Philosophy
 - Modular and upgradeable
 - Premium materials (real wood, quality components)
 - Weather-resistant design
 - Easy installation for non-technical users
+- Each device type is engineered end-to-end for its purpose, not built from a shared electronics platform
 
 ---
 
@@ -80,7 +85,7 @@ The current generation of NutNode electronics runs on stock Raspberry Pi 5 retai
 
 ### v2: Pi Compute Module 5 + custom carrier board
 
-The next hardware iteration is the Raspberry Pi Compute Module 5 (CM5) on a custom carrier board designed specifically for the NutPod. The CM5 uses the same SoC and software stack as the Pi 5 — meaning every line of code currently in the project runs unchanged — but strips the board to just the chip plus RAM and optional eMMC, exposed via a 100-pin edge connector.
+The next NutNode iteration is the Raspberry Pi Compute Module 5 (CM5) on a custom carrier board designed specifically for the NutPod. The CM5 uses the same SoC and software stack as the Pi 5 — meaning every line of code currently in the project runs unchanged — but strips the board to just the chip plus RAM and optional eMMC, exposed via a 100-pin edge connector.
 
 The carrier board then exposes only the IO we actually use:
 - Two CSI camera ports
@@ -92,6 +97,8 @@ The carrier board then exposes only the IO we actually use:
 The headline feature is the **U.FL antenna connector on the CM5 itself.** Pairing it with an SMA pigtail and a small external antenna mounted on the SquirrelBox exterior solves the marginal-WiFi problem that is currently the biggest practical limitation of outdoor deployment. Realistic WiFi range improves from "edge of the home network" to "comfortable across walls and yards."
 
 Per-unit BOM also drops meaningfully: CM5 starts around $45 (4GB, no eMMC) vs ~$80 for a Pi 5 retail board, and the carrier board strips out USB hubs, HDMI controllers, the SD card slot, and other components the sealed product doesn't need.
+
+Future device-type nodes (ScoutNode, GroundNode, BirdNode) will follow the same CM5-or-equivalent compute-module-on-custom-carrier pattern, with each carrier sized and provisioned for that device type's specific sensor and camera needs. The pattern is reusable; the specific carriers are not.
 
 ### Speculative: fully custom electronics
 
@@ -255,6 +262,7 @@ The core insight: **People want to connect with nature, share what they see, and
 | 2025-01-15 | Initial creation from architecture brainstorming sessions |
 | 2026-05-08 | Aligned product table with technical doc (NutPod = device, NutNode = electronics module). Fixed cross-reference filename. |
 | 2026-05-17 | Added Section 4 (Hardware Engineering Roadmap) documenting the CM5 + custom carrier board path as the v2 hardware direction. Notes external U.FL antenna as the headline feature solving the current marginal-WiFi limitation. Full custom PCB explicitly deferred. Subsequent sections renumbered. |
+| 2026-05-17 | Reframed the Nutwork concept (Section 1) and Hardware Product Line (Section 3) to reflect that each device type has its own purpose-built node rather than sharing a single NutNode module across products. NutNode removed from the customer-facing product table and described as an internal component of NutPod. Future Variants table updated to call out each variant's own node (ScoutNode, GroundNode, BirdNode). Hardware Philosophy gains a line about end-to-end engineering per device type. Section 4 (Hardware Engineering Roadmap) notes the CM5-on-custom-carrier pattern is reusable across future nodes even though specific carriers are not. |
 
 ---
 
