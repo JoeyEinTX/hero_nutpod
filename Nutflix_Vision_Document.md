@@ -121,15 +121,18 @@ This phase exists to prove the camera pipeline and establish clean architecture 
 
 Phase 2 transforms the system from one-shot capture into continuous observation. It introduces motion detection, video clips, heartbeat snapshots, an event database, and retention management.
 
+> The clip-length model in this section was revised on 2026-05-17 from fixed-length clips (pre-roll + fixed post-roll) to variable-length clips that extend as long as motion continues. The original fixed-clip behavior is preserved in Document History; this section describes current behavior.
+
 ### Required functionality
 
 1. Run as a long-running systemd service that auto-starts on boot and restarts on failure.
 2. Continuously monitor both cameras for motion using a low-resolution sampling stream.
-3. On motion detection from a given camera, record a video clip consisting of pre-roll seconds (buffered before the trigger) plus post-roll seconds (after the trigger), plus a full-resolution snapshot from that same camera at trigger time.
-4. Capture a heartbeat snapshot from each camera every N minutes (default 15) regardless of motion activity.
-5. Log every event — motion or heartbeat — to a SQLite database with the schema defined below.
-6. Provide a separate retention script, triggered by a systemd timer (daily), that prunes old media according to configured retention windows.
-7. Honor a `keepers/` subdirectory under both `output/snapshots/` and `output/clips/` that the retention script never touches.
+3. On motion detection from a given camera, begin recording a video clip. The clip consists of pre-roll seconds (buffered before the trigger) followed by continuous recording that extends as long as motion keeps firing, plus tail seconds after motion stops, capped at `max_clip_seconds` if that value is non-null.
+4. After clip recording ends, capture a full-resolution snapshot from the same camera. The snapshot represents the end-of-event state for the clip, not the triggering moment. Snapshot and clip share the trigger timestamp in their filenames.
+5. Capture a heartbeat snapshot from each camera every N minutes (default 15) regardless of motion activity.
+6. Log every event — motion or heartbeat — to a SQLite database with the schema defined below. The `timestamp` column captures trigger time, not clip-end time.
+7. Provide a separate retention script, triggered by a systemd timer (daily), that prunes old media according to configured retention windows.
+8. Honor a `keepers/` subdirectory under both `output/snapshots/` and `output/clips/` that the retention script never touches.
 
 ### NOT in Phase 2
 
@@ -144,8 +147,8 @@ Phase 2 transforms the system from one-shot capture into continuous observation.
 | Purpose | Resolution | Framerate | Rationale |
 |---------|------------|-----------|-----------|
 | Snapshots | 4608×2592 | n/a (still) | Full sensor, no crop; reference-quality stills |
-| Clips | 2304×1296 | 30 fps | Smooth playback, full FOV, manageable file size |
-| Motion sampling | 1536×864 | 30 fps | Low CPU, sufficient detail for frame deltas |
+| Clips | 2304×1296 | 15 fps | Smooth playback, full FOV, manageable file size |
+| Motion sampling | 1536×864 | 15 fps | Low CPU, sufficient detail for frame deltas |
 
 ### Motion detection model
 
@@ -153,9 +156,29 @@ Two configurable thresholds plus a cooldown:
 
 - `pixel_threshold` — per-pixel brightness delta required to count a pixel as "changed."
 - `area_threshold_percent` — percentage of the frame's pixels that must cross the pixel threshold to count as motion.
-- `cooldown_seconds` — minimum time between consecutive motion triggers per camera (prevents one wandering squirrel from generating 100 events).
+- `cooldown_seconds` — minimum quiet time between consecutive events on the same camera. The cooldown begins when the previous clip's recording *ends*, not when it started. During the cooldown window, motion triggers are suppressed for that camera. This prevents back-to-back triggering on what is effectively the same continuous event.
 
 A `sensitivity_preset` shortcut (low / medium / high) selects reasonable defaults for the underlying thresholds. The raw thresholds can be overridden explicitly.
+
+### Clip length model (revised 2026-05-17)
+
+A motion event produces a single variable-length clip:
+
+1. **Trigger.** Motion detector fires. Recording begins immediately.
+2. **Pre-roll.** The circular buffer flushes the previous `pre_roll_seconds` of footage into the clip (default 5s).
+3. **Active recording.** Recording continues. The motion detector keeps sampling the lores stream during recording (same algorithm, same thresholds as the initial trigger detection).
+4. **Tail extension.** Every time motion fires during recording, the "stop in N seconds" timer resets to `tail_seconds` (default 10s).
+5. **Natural end.** When `tail_seconds` elapse with no motion, recording stops.
+6. **Hard cap.** If `max_clip_seconds` is a positive integer and the clip duration reaches that value, recording stops regardless of ongoing motion. If `max_clip_seconds` is `null`, no cap is applied — recording continues until motion stops naturally.
+7. **Snapshot.** After recording ends, the camera reconfigures to snapshot resolution and captures a full-resolution still.
+8. **Cooldown.** The `cooldown_seconds` timer starts. No new motion triggers on this camera until the cooldown expires.
+
+Resulting clip durations under the default config (5s pre-roll, 10s tail, 120s cap):
+- A brief 2-second motion event → clip is approximately `5 + 2 + 10 = 17` seconds.
+- A 45-second wildlife visit → clip is approximately `5 + 45 + 10 = 60` seconds.
+- A continuous motion event longer than 105 seconds → clip is capped at 120 seconds.
+
+Hitting the cap means losing footage past the cap, then waiting the cooldown before any new trigger can fire. Operators who routinely hit the cap should consider raising it.
 
 ### SQLite event schema
 
@@ -164,7 +187,7 @@ A single `events` table:
 | Column | Type | Notes |
 |--------|------|-------|
 | id | INTEGER PRIMARY KEY | autoincrement |
-| timestamp | TEXT | ISO-8601 |
+| timestamp | TEXT | ISO-8601, trigger time (not clip-end time) |
 | device_name | TEXT | e.g. "Hero" |
 | camera_name | TEXT | e.g. "NestCam" |
 | event_type | TEXT | "motion" or "heartbeat" |
@@ -188,7 +211,7 @@ Files inside any `keepers/` subdirectory are exempt from all retention.
 
 Minimal threading is permitted only where required for parallel motion monitoring of both cameras. The recommended approach is one worker thread per camera plus a main thread managing service lifecycle and signal handling. No speculative concurrency, no asyncio, no thread pools beyond what is described.
 
-Sequential operation within a single camera remains the rule: motion sampling, snapshot capture, and clip recording on a given camera never overlap.
+Sequential operation within a single camera remains the rule: motion sampling, snapshot capture, and clip recording on a given camera never overlap. The new variable-length recording does not violate this — the lores stream and the main stream both come from the same camera and run concurrently at the camera level, but within the camera worker thread the operations are serialized.
 
 ### Reference `config.yaml` for Phase 2
 
@@ -211,12 +234,14 @@ capture:
     resolution: [4608, 2592]
   clip:
     resolution: [2304, 1296]
-    framerate: 30
+    framerate: 15
     pre_roll_seconds: 5
-    post_roll_seconds: 10
+    tail_seconds: 10            # how long recording continues after motion stops
+    max_clip_seconds: 120       # null = no maximum; clip extends as long as motion continues
   motion_sampling:
     resolution: [1536, 864]
-    framerate: 30
+    framerate: 15
+  awb_mode: daylight
 
 heartbeat:
   interval_minutes: 15
@@ -225,7 +250,7 @@ motion:
   sensitivity_preset: medium
   pixel_threshold: 25
   area_threshold_percent: 2.0
-  cooldown_seconds: 30
+  cooldown_seconds: 120
 
 retention:
   clips_days: 7
@@ -242,9 +267,9 @@ paths:
   keepers_subdir: keepers
 ```
 
-This is the authoritative shape for Phase 2. Phase 3 extends it with new top-level blocks (see Section 5.3) but does not modify existing keys.
+This is the authoritative shape for Phase 2 as of 2026-05-17. Phase 3 extends it with new top-level blocks (see Section 5.3) but does not modify existing keys. The `post_roll_seconds` key from the original Phase 2 spec has been renamed to `tail_seconds` to honestly describe its new role under the variable-length clip model.
 
-**Status: complete as of 2026-05-13.**
+**Status: Phase 2 functionally complete as of 2026-05-13. Clip length model revised 2026-05-17.**
 
 ## 5.3 Local Dashboard, Environmental Sensors & IR Illumination (Phase 3)
 
@@ -320,6 +345,7 @@ Preview file path is fixed: `output/preview/{display_name}.jpg`. The dashboard r
 | GET | `/clip/<id>` | Event clip file (MP4) |
 | POST | `/events/<id>/keep` | Move event's snapshot + clip to keepers/ |
 | POST | `/events/<id>/unkeep` | Move event's snapshot + clip back out of keepers/ |
+| POST | `/events/<id>/delete` | Permanently delete event's snapshot, clip, and DB row |
 
 All routes return HTML except for the file-serving routes and POSTs (which redirect back to the referrer after action).
 
@@ -557,7 +583,7 @@ Preview frame naming (Phase 3, no timestamp because it's overwritten in place):
 - `nestcam.jpg`
 - `crittercam.jpg`
 
-Snapshot and clip filenames produced by the same motion event share a timestamp.
+Snapshot and clip filenames produced by the same motion event share a timestamp (the trigger time).
 
 ## 9. Development Philosophy for AI Assistants
 
@@ -602,7 +628,7 @@ Planned future phases:
 
 Phase 2 (Section 5.2):
 - Motion-triggered capture
-- Video clip recording with pre/post-roll
+- Variable-length video clip recording with pre-roll and active-motion tail
 - Heartbeat snapshots
 - SQLite event log
 - Retention management
@@ -648,3 +674,4 @@ Every layer should have a clear purpose.
 | 2026-05-12 | Phase 1 marked complete. Section 5.2 added with full Phase 2 specification: motion-triggered capture, video clips with pre/post-roll, heartbeat snapshots, SQLite event log, retention policy with keepers exemption, systemd service model. Section 6 folder structure expanded. Section 8 naming examples updated to include clip filename. Section 9 reorganized into permanent bans vs. per-phase scope. NVMe noted as recommended storage in Section 4. |
 | 2026-05-14 | Phase 2 marked complete. Section 5.3 added with full Phase 3 specification: local Flask dashboard (separate process, no auth, LAN-only), BME280 environmental sensing via in-repo smbus2 driver, IR illumination via Adafruit 940nm boards with brightness-aware GPIO toggling, preview-frame architecture for live view, sensor_readings SQLite table, keeper marking via UI. Section 4 lists Phase 3 hardware additions (BME280, IR emitters). Section 6 folder structure expanded. Section 8 adds rules for dashboard route and template naming. Section 9 relaxes for Flask + GPIO + I2C in scope, explicitly bans Flask extensions and real-time push. Section 10 Phase 3 entry now points to 5.3. |
 | 2026-05-17 | Reframed the "electronics module" concept in Section 2: each device type has its own node (NutNode in NutPod, ScoutNode in ScoutPod, etc.) rather than a single shared module reused across device types. Reorganized device types into current (NutPod) vs future (ScoutPod, GroundPod, BirdBox) to reflect actual product status. Added note that the Nutwork is the collection of all nodes across all devices. Section 4 hardware foundation labeled explicitly as NutNode hardware and notes that future device types will define their own node hardware. No code changes — "NutNode" never appeared as a code identifier; the reframe is conceptual only. |
+| 2026-05-17 | Phase 2 clip length model revised. Original behavior: fixed-length clips (pre-roll + fixed post-roll = always 15 seconds). New behavior: variable-length clips that extend as long as motion continues, with `tail_seconds` after motion stops and an optional `max_clip_seconds` cap. Cooldown semantics revised to begin at clip end (not at trigger), making the cooldown a true gap between distinct events. Snapshot still captured after clip recording ends (now represents end-of-event state, not triggering moment; documented in Section 5.2 item 4). Reference `config.yaml` updated: `post_roll_seconds` renamed to `tail_seconds`, new `max_clip_seconds` key added (null = no cap). Phase 2 spec status remains "complete" — this is a behavior revision within an already-shipped phase, not a new phase. POST /events/<id>/delete route also added to Section 5.3 route plan to match the per-event delete button shipped 2026-05-17. |
